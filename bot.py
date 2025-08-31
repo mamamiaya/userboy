@@ -477,7 +477,8 @@ class A:
     async def f(s,q):
         try:
             return await(await s.s.get(s.u,params={'q':q,'ei':'UTF-8'},timeout=10)).text()
-        except:
+        except Exception as e:
+            logging.error(f"AOL search error: {e}")
             return
 
     def p(s,h):
@@ -1149,3 +1150,4 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
