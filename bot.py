@@ -140,7 +140,13 @@ async def save_dialogue(mode: str, q: str, a: str):
         fn, items = f"{mode}_dialogues.jsonl", []
         try:
             async with aiofiles.open(fn, "r", encoding="utf-8") as f:
-                async for l in f: items.append(json.loads(l))
+                async for l in f:
+                    if not l.strip():
+                        continue
+                    try:
+                        items.append(json.loads(l))
+                    except Exception as e:
+                        logging.warning(f"Некорректная строка в {fn}: {l.strip()[:80]}... ({e})")
         except FileNotFoundError: pass
         for it in items:
             if it.get("question") == q:
@@ -414,6 +420,8 @@ async def generate_text_response_step_2(mode:str,query:str)->str:
         try:
             async with aiofiles.open(path,encoding="utf-8") as f:
                 async for l in f:
+                    continue
+                try:
                     e=json.loads(l);a=[v for k,v in e.items() if k.startswith("answer")]
                     if a:data.append({'question':e['question'],'answers':a});qs.append(e['question'])
         except: vectors_cache[mode]={"data":[],"qv":[],"qn":[],"idf":{}};return "⚠ Нет сохранённых ответов"
@@ -1139,4 +1147,5 @@ async def main():
         await bot.session.close()
 
 if __name__ == "__main__":
+
     asyncio.run(main())
