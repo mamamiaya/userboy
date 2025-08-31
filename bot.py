@@ -410,37 +410,64 @@ async def generate_text_response_step_1(prompt: str, target_id: int) -> str:
     except Exception:
         return await generate_text_response_step_2(mode, prompt)
 
-async def generate_text_response_step_2(mode:str,query:str)->str:
-    import math,random,json,aiofiles
-    def tok(t): 
-        for c in ".,!?;:\"()[]{}<>": t=t.replace(c,' ')
+async def generate_text_response_step_2(mode: str, query: str) -> str:
+    import math, random, json, aiofiles
+
+    def tok(t):
+        for c in ".,!?;:\"()[]{}<>":
+            t = t.replace(c, " ")
         return t.lower().split()
+
     if mode not in vectors_cache:
-        path=f"{mode}_dialogues.jsonl";data,qs=[],[]
+        path = f"{mode}_dialogues.jsonl"
+        data, qs = [], []
         try:
-            async with aiofiles.open(path,encoding="utf-8") as f:
+            async with aiofiles.open(path, encoding="utf-8") as f:
                 async for l in f:
-                    continue
-                try:
-                    e=json.loads(l);a=[v for k,v in e.items() if k.startswith("answer")]
-                    if a:data.append({'question':e['question'],'answers':a});qs.append(e['question'])
-        except: vectors_cache[mode]={"data":[],"qv":[],"qn":[],"idf":{}};return "⚠ Нет сохранённых ответов"
-        N=len(qs);dc={};qt=[tok(q) for q in qs]
-        [[dc.update({x:dc.get(x,0)+1}) for x in set(t)] for t in qt]
-        idf={t:math.log((N+1)/(df+1))+1 for t,df in dc.items()}
-        qv=[{t:tks.count(t)*idf[t] for t in set(tks)} for tks in qt]
-        qn=[math.sqrt(sum(w*w for w in v.values())) for v in qv]
-        vectors_cache[mode]={"data":data,"qv":qv,"qn":qn,"idf":idf}
-    c=vectors_cache[mode];data,qv,qn,idf=c["data"],c["qv"],c["qn"],c["idf"]
-    if not data:return "⚠ Нет сохранённых ответов"
-    tf={};[tf.update({x:tf.get(x,0)+1}) for x in tok(query)]
-    v={t:c*idf.get(t,math.log((len(data)+1)/1)+1) for t,c in tf.items()}
-    n=math.sqrt(sum(w*w for w in v.values()))
-    def cos(v1,n1,v2,n2):return 0 if not n1 or not n2 else sum(w*v2.get(t,0) for t,w in v1.items())/(n1*n2)
-    sims=[(cos(v,n,qvv,qnn),j) for j,(qvv,qnn) in enumerate(zip(qv,qn))]
-    cand=[j for s,j in sims if s>0.8]
-    i=random.choice(cand) if cand else max(sims)[1]
-    return random.choice(data[i]['answers']) if data[i]['answers'] else "⚠ Нет ответа"
+                    if not l.strip():
+                        continue
+                    try:
+                        e = json.loads(l)
+                        a = [v for k, v in e.items() if k.startswith("answer")]
+                        if a:
+                            data.append({"question": e["question"], "answers": a})
+                            qs.append(e["question"])
+                    except Exception as e:
+                        logging.warning(f"Некорректная строка в {path}: {l.strip()[:80]}... ({e})")
+        except FileNotFoundError:
+            vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}
+            return "⚠ Нет сохранённых ответов"
+
+        N = len(qs)
+        if not N:
+            vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}
+            return "⚠ Нет сохранённых ответов"
+
+        dc = {}
+        qt = [tok(q) for q in qs]
+        [[dc.update({x: dc.get(x, 0) + 1}) for x in set(t)] for t in qt]
+        idf = {t: math.log((N + 1) / (df + 1)) + 1 for t, df in dc.items()}
+        qv = [{t: tks.count(t) * idf[t] for t in set(tks)} for tks in qt]
+        qn = [math.sqrt(sum(w * w for w in v.values())) for v in qv]
+        vectors_cache[mode] = {"data": data, "qv": qv, "qn": qn, "idf": idf}
+
+    c = vectors_cache[mode]
+    data, qv, qn, idf = c["data"], c["qv"], c["qn"], c["idf"]
+    if not data:
+        return "⚠ Нет сохранённых ответов"
+
+    tf = {}
+    [tf.update({x: tf.get(x, 0) + 1}) for x in tok(query)]
+    v = {t: c * idf.get(t, math.log((len(data) + 1) / 1) + 1) for t, c in tf.items()}
+    n = math.sqrt(sum(w * w for w in v.values()))
+
+    def cos(v1, n1, v2, n2):
+        return 0 if not n1 or not n2 else sum(w * v2.get(t, 0) for t, w in v1.items()) / (n1 * n2)
+
+    sims = [(cos(v, n, qvv, qnn), j) for j, (qvv, qnn) in enumerate(zip(qv, qn))]
+    cand = [j for s, j in sims if s > 0.8]
+    i = random.choice(cand) if cand else max(sims)[1]
+    return random.choice(data[i]["answers"]) if data[i]["answers"] else "⚠ Нет ответа"
 
 async def get_voice_message_bytes(text: str) -> BufferedInputFile:
     url = f"https://api.streamelements.com/kappa/v2/speech?voice=Maxim&text={text}"
@@ -1150,4 +1177,5 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
