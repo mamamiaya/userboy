@@ -386,88 +386,60 @@ async def pbot_kind(name: str, question: str | None = None) -> str:
 
 async def generate_text_response_step_1(prompt: str, target_id: int) -> str:
     mode = get_user_mode(target_id)
-    payload = {
-        "model": "llamascout",
-        "messages": [
-            {"role": "system", "content": get_prompt_by_mode(mode)},
-            {"role": "user", "content": prompt}
-        ],
-        "seed": random.randint(1, 1000000)
-    }
+    payload = {"model": "llamascout", "messages": [{"role": "system", "content": get_prompt_by_mode(mode)}, {"role": "user", "content": prompt}], "seed": random.randint(1, 1000000)}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
-            async with s.post(
-                "https://text.pollinations.ai/openai",
-                headers={"Content-Type": "application/json"},
-                json=payload
-            ) as r:
-                js = await r.json()
+            async with s.post("https://text.pollinations.ai/openai", headers={"Content-Type": "application/json"}, json=payload) as r:
+                js = await r.json(content_type=None)
+                if r.status != 200 or "error" in js:
+                    logging.error(f"API step1 error: {js.get('error') or js}")
+                    return await generate_text_response_step_2(mode, prompt)
                 a = js.get("choices", [{}])[0].get("message", {}).get("content")
                 if a:
                     asyncio.create_task(save_dialogue(mode, prompt, a))
                     return a
                 return await generate_text_response_step_2(mode, prompt)
-    except Exception:
+    except Exception as e:
+        logging.error(f"API step1 exception: {e}")
         return await generate_text_response_step_2(mode, prompt)
 
 async def generate_text_response_step_2(mode: str, query: str) -> str:
     import math, random, json, aiofiles
-
     def tok(t):
-        for c in ".,!?;:\"()[]{}<>":
-            t = t.replace(c, " ")
+        for c in ".,!?;:\"()[]{}<>": t = t.replace(c, ' ')
         return t.lower().split()
-
     if mode not in vectors_cache:
-        path = f"{mode}_dialogues.jsonl"
-        data, qs = [], []
+        path, data, qs = f"{mode}_dialogues.jsonl", [], []
         try:
-            async with aiofiles.open(path, encoding="utf-8") as f:
-                async for l in f:
-                    if not l.strip():
-                        continue
-                    try:
-                        e = json.loads(l)
-                        a = [v for k, v in e.items() if k.startswith("answer")]
-                        if a:
-                            data.append({"question": e["question"], "answers": a})
-                            qs.append(e["question"])
-                    except Exception as e:
-                        logging.warning(f"Некорректная строка в {path}: {l.strip()[:80]}... ({e})")
-        except FileNotFoundError:
+            async with aiofiles.open(path, 'rb') as f:
+                async for raw in f:
+                    line, obj = None, None
+                    for enc in ("utf-8-sig", "cp1251", "latin-1"):
+                        try: line = raw.decode(enc).strip().lstrip('\ufeff'); obj = json.loads(line); break
+                        except: continue
+                    if not obj: continue
+                    a = [v for k, v in obj.items() if k.startswith("answer")]
+                    if a: data.append({'question': obj['question'], 'answers': a}); qs.append(obj['question'])
+        except:
             vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}
             return "⚠ Нет сохранённых ответов"
-
-        N = len(qs)
-        if not N:
-            vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}
-            return "⚠ Нет сохранённых ответов"
-
-        dc = {}
-        qt = [tok(q) for q in qs]
+        if not data: vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}; return "⚠ Нет сохранённых ответов"
+        N, dc, qt = len(qs), {}, [tok(q) for q in qs]
         [[dc.update({x: dc.get(x, 0) + 1}) for x in set(t)] for t in qt]
         idf = {t: math.log((N + 1) / (df + 1)) + 1 for t, df in dc.items()}
         qv = [{t: tks.count(t) * idf[t] for t in set(tks)} for tks in qt]
         qn = [math.sqrt(sum(w * w for w in v.values())) for v in qv]
         vectors_cache[mode] = {"data": data, "qv": qv, "qn": qn, "idf": idf}
-
-    c = vectors_cache[mode]
-    data, qv, qn, idf = c["data"], c["qv"], c["qn"], c["idf"]
-    if not data:
-        return "⚠ Нет сохранённых ответов"
-
-    tf = {}
-    [tf.update({x: tf.get(x, 0) + 1}) for x in tok(query)]
+    c = vectors_cache[mode]; data, qv, qn, idf = c["data"], c["qv"], c["qn"], c["idf"]
+    if not data: return "⚠ Нет сохранённых ответов"
+    tf = {}; [tf.update({x: tf.get(x, 0) + 1}) for x in tok(query)]
     v = {t: c * idf.get(t, math.log((len(data) + 1) / 1) + 1) for t, c in tf.items()}
     n = math.sqrt(sum(w * w for w in v.values()))
-
-    def cos(v1, n1, v2, n2):
-        return 0 if not n1 or not n2 else sum(w * v2.get(t, 0) for t, w in v1.items()) / (n1 * n2)
-
+    cos = lambda v1, n1, v2, n2: 0 if not n1 or not n2 else sum(w * v2.get(t, 0) for t, w in v1.items()) / (n1 * n2)
     sims = [(cos(v, n, qvv, qnn), j) for j, (qvv, qnn) in enumerate(zip(qv, qn))]
     cand = [j for s, j in sims if s > 0.8]
     i = random.choice(cand) if cand else max(sims)[1]
-    return random.choice(data[i]["answers"]) if data[i]["answers"] else "⚠ Нет ответа"
+    return random.choice(data[i]['answers']) if data[i]['answers'] else "⚠ Нет ответа"
 
 async def get_voice_message_bytes(text: str) -> BufferedInputFile:
     url = f"https://api.streamelements.com/kappa/v2/speech?voice=Maxim&text={text}"
@@ -1177,5 +1149,6 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
