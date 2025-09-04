@@ -380,7 +380,7 @@ async def pbot_kind(name: str, question: str | None = None) -> str:
 
 async def generate_text_response_step_1(prompt: str, target_id: int) -> str:
     mode = get_user_mode(target_id)
-    payload = {"model": "mistral", "messages": [{"role": "system", "content": get_prompt_by_mode(mode)}, {"role": "user", "content": prompt}], "seed": random.randint(1, 1000000)}
+    payload = {"model": "openai-fast", "messages": [{"role": "system", "content": get_prompt_by_mode(mode)}, {"role": "user", "content": prompt}], "seed": random.randint(1, 1000000)}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
             async with s.post("https://text.pollinations.ai/openai", headers={"Content-Type": "application/json"}, json=payload) as r:
@@ -1136,6 +1136,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
