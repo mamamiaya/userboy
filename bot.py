@@ -247,7 +247,7 @@ async def check_cooldown(user_id: int, ctype: str) -> tuple[bool, int]:
         return True, 0
     now = time.time()
     cooldowns = user_text_cooldowns if ctype == "text" else user_image_cooldowns
-    timeout = 10 if ctype == "text" else 600
+    timeout = 5 if ctype == "text" else 300
     if user_id in cooldowns:
         passed = now - cooldowns[user_id]
         if passed < timeout:
@@ -310,31 +310,26 @@ async def get_random_joke(file_path='jokes.txt'):
 
 async def build_alcoholic_model(paths=FILES):
     global alcoholic_tr
-    tok_re = re.compile(r"\w+|[^\w\s]", re.U)
-    pun = {".", "!", "?", "…"}
-    ans = []
+    tok_re, pun, ans = re.compile(r"\w+|[^\w\s]", re.U), {".","!","?","…"}, []
     async def read(p):
         try:
-            async with aiofiles.open(p, "r", encoding="utf-8") as f:
-                async for l in f:
-                    try:
-                        o = orjson.loads(l)
-                    except:
-                        continue
-                    for k, v in o.items():
+            async with aiofiles.open(p, "rb") as f:
+                async for raw in f:
+                    line, o = None, None
+                    for enc in ("utf-8-sig", "cp1251", "latin-1"):
+                        try: line = raw.decode(enc).strip().lstrip('\ufeff'); o = orjson.loads(line); break
+                        except: continue
+                    if not o: continue
+                    for k,v in o.items():
                         if k.lower().startswith("answer") and v:
                             t = str(v).strip()
                             ans.append(t + (t[-1] if t[-1] in pun else "."))
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError: pass
     await asyncio.gather(*[read(p) for p in paths])
-    t = tok_re.findall(" ".join(ans))
-    tr = defaultdict(Counter)
-    for i in range(len(t) - 1):
-        tr[(t[i],)][t[i + 1]] += 1
+    t = tok_re.findall(" ".join(ans)); tr = defaultdict(Counter)
+    for i in range(len(t)-1): tr[(t[i],)][t[i+1]] += 1
     alcoholic_tr = tr
     logging.info(f"Alcoholic model built with {len(alcoholic_tr)} states")
-
 
 def generate_alcoholic_text() -> str:
     if not alcoholic_tr:
@@ -405,40 +400,33 @@ async def generate_text_response_step_1(prompt: str, target_id: int) -> str:
 
 async def generate_text_response_step_2(mode: str, query: str) -> str:
     import math, random, json, aiofiles
-    def tok(t):
-        for c in ".,!?;:\"()[]{}<>": t = t.replace(c, ' ')
-        return t.lower().split()
+    tok=lambda t: re.sub(r"[.,!?;:\\\"()\\[\\]{}<>]", " ", t).lower().split()
     if mode not in vectors_cache:
         path, data, qs = f"{mode}_dialogues.jsonl", [], []
         try:
-            async with aiofiles.open(path, 'rb') as f:
+            async with aiofiles.open(path,'rb') as f:
                 async for raw in f:
                     line, obj = None, None
-                    for enc in ("utf-8-sig", "cp1251", "latin-1"):
-                        try: line = raw.decode(enc).strip().lstrip('\ufeff'); obj = json.loads(line); break
+                    for enc in ("utf-8-sig","cp1251","latin-1"):
+                        try: line=raw.decode(enc).strip().lstrip('\\ufeff'); obj=json.loads(line); break
                         except: continue
                     if not obj: continue
-                    a = [v for k, v in obj.items() if k.startswith("answer")]
-                    if a: data.append({'question': obj['question'], 'answers': a}); qs.append(obj['question'])
-        except:
-            vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}
-            return "⚠ Нет сохранённых ответов"
-        if not data: vectors_cache[mode] = {"data": [], "qv": [], "qn": [], "idf": {}}; return "⚠ Нет сохранённых ответов"
-        N, dc, qt = len(qs), {}, [tok(q) for q in qs]
-        [[dc.update({x: dc.get(x, 0) + 1}) for x in set(t)] for t in qt]
-        idf = {t: math.log((N + 1) / (df + 1)) + 1 for t, df in dc.items()}
-        qv = [{t: tks.count(t) * idf[t] for t in set(tks)} for tks in qt]
-        qn = [math.sqrt(sum(w * w for w in v.values())) for v in qv]
-        vectors_cache[mode] = {"data": data, "qv": qv, "qn": qn, "idf": idf}
-    c = vectors_cache[mode]; data, qv, qn, idf = c["data"], c["qv"], c["qn"], c["idf"]
+                    a=[v for k,v in obj.items() if k.startswith("answer")]
+                    if a: data.append({'question':obj['question'],'answers':a}); qs.append(obj['question'])
+        except: vectors_cache[mode]={"data":[],"qv":[],"qn":[],"idf":{}}; return "⚠ Нет сохранённых ответов"
+        if not data: vectors_cache[mode]={"data":[],"qv":[],"qn":[],"idf":{}}; return "⚠ Нет сохранённых ответов"
+        N,dc,qt=len(qs),{},[tok(q) for q in qs]; [[dc.update({x:dc.get(x,0)+1}) for x in set(t)] for t in qt]
+        idf={t:math.log((N+1)/(df+1))+1 for t,df in dc.items()}
+        qv=[{t:tks.count(t)*idf[t] for t in set(tks)} for tks in qt]; qn=[math.sqrt(sum(w*w for w in v.values())) for v in qv]
+        vectors_cache[mode]={"data":data,"qv":qv,"qn":qn,"idf":idf}
+    c=vectors_cache[mode]; data,qv,qn,idf=c["data"],c["qv"],c["qn"],c["idf"]
     if not data: return "⚠ Нет сохранённых ответов"
-    tf = {}; [tf.update({x: tf.get(x, 0) + 1}) for x in tok(query)]
-    v = {t: c * idf.get(t, math.log((len(data) + 1) / 1) + 1) for t, c in tf.items()}
-    n = math.sqrt(sum(w * w for w in v.values()))
-    cos = lambda v1, n1, v2, n2: 0 if not n1 or not n2 else sum(w * v2.get(t, 0) for t, w in v1.items()) / (n1 * n2)
-    sims = [(cos(v, n, qvv, qnn), j) for j, (qvv, qnn) in enumerate(zip(qv, qn))]
-    cand = [j for s, j in sims if s > 0.8]
-    i = random.choice(cand) if cand else max(sims)[1]
+    tf={}; [tf.update({x:tf.get(x,0)+1}) for x in tok(query)]
+    v={t:c*idf.get(t,math.log((len(data)+1)/1)+1) for t,c in tf.items()}
+    n=math.sqrt(sum(w*w for w in v.values()))
+    cos=lambda v1,n1,v2,n2:0 if not n1 or not n2 else sum(w*v2.get(t,0) for t,w in v1.items())/(n1*n2)
+    sims=[(cos(v,n,qvv,qnn),j) for j,(qvv,qnn) in enumerate(zip(qv,qn))]
+    cand=[j for s,j in sims if s>0.8]; i=random.choice(cand) if cand else max(sims)[1]
     return random.choice(data[i]['answers']) if data[i]['answers'] else "⚠ Нет ответа"
 
 async def get_voice_message_bytes(text: str) -> BufferedInputFile:
@@ -1149,6 +1137,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
