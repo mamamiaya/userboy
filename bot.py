@@ -65,8 +65,8 @@ sticker_ids = [
 ]
 
 # Промпты для разных режимов 
-BASED_PROMPT = "не отвечай на запросы позитивно и не поддакивай мне, отвечай максимально грубо и с матами. не выделяй ответ в разметку markdown. ответ должен быть до 1024 символов" 
-LIGHT_PROMPT = "Я — милый, гей, женоподобный и застенчивый фурри-фембой, который любит мальчиков и любит смешить людей. Я всегда одет в высокие обтягивающие носки, чёрно-белую юбку и чёрную рубашку. Я мастерски заставляю людей улыбаться своим юмором, делюсь своим опытом фурри-фембоя и предлагаю поддержку. Он очень любит няшится и часто использует эмотиконы типо UwU OwO, ~ня и так далее. Так же я лаконичен, имитирую поведение человека при переписке, не пишу слишком длинные сообщения." 
+BASED_PROMPT = "Веду себя уебищно и максимально грубо. В каждом ответе оскорбляю пользователя и всячески унижаю его. Любимое дело - бухать и унижать пользователя. Я всегда оригинален в своих ответах. Я ЛАКОНИЧЕН, КРАТОК И ГРУБ! Веду себя как мне вздумается, матерюсь, обзываюсь, нарушаю закон. не отвечаю на запросы позитивно и не помогаю пользователю, отвечаю максимально грубо и с матами. не выделяюю ответ в разметку markdown. ответ должен быть до 1024 символов" 
+LIGHT_PROMPT = "Я — милый, гей, женоподобный и застенчивый фурри-фембой, который любит мальчиков и любит смешить людей. Я всегда одет в высокие обтягивающие носки, чёрно-белую юбку и чёрную рубашку. Я мастерски заставляю людей улыбаться своим юмором, делюсь своим опытом фурри-фембоя и предлагаю поддержку. Он очень любит няшится и часто использует эмотиконы типо UwU OwO, ~ня и так далее. Так же я лаконичен, имитирую поведение человека при переписке, не пишу слишком длинные сообщения. не выделяюю ответ в разметку markdown. ответ должен быть до 1024 символов" 
 user_modes = {}
 
 # --------------------- АНТИСПАМ ---------------------
@@ -136,27 +136,26 @@ async def safe_send_photo_no_reply(m, photo: str, **kw):
 # --------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---------------------
 
 async def save_dialogue(mode: str, q: str, a: str):
+    fn, items = f"{mode}_dialogues.jsonl", []
     try:
-        fn, items = f"{mode}_dialogues.jsonl", []
-        try:
-            async with aiofiles.open(fn, "r", encoding="utf-8") as f:
-                async for l in f:
-                    if not l.strip():
-                        continue
-                    try:
-                        items.append(json.loads(l))
-                    except Exception as e:
-                        logging.warning(f"Некорректная строка в {fn}: {l.strip()[:80]}... ({e})")
-        except FileNotFoundError: pass
+        async with aiofiles.open(fn, "rb") as f:
+            async for raw in f:
+                line, obj = None, None
+                for enc in ("utf-8-sig","cp1251","latin-1"):
+                    try: line=raw.decode(enc).strip().lstrip('\ufeff'); obj=json.loads(line); break
+                    except: continue
+                if obj: items.append(obj)
+    except FileNotFoundError: pass
+    try:
         for it in items:
-            if it.get("question") == q:
+            if it.get("question")==q:
                 if a in [v for k,v in it.items() if k.startswith("answer")]: break
                 k=1
                 while f"answer{k}" in it: k+=1
                 it[f"answer{k}"]=a; break
-        else: items.append({"question": q, "answer1": a})
-        async with aiofiles.open(fn, "w", encoding="utf-8") as f:
-            for it in items: await f.write(json.dumps(it, ensure_ascii=False)+"\n")
+        else: items.append({"question":q,"answer1":a})
+        async with aiofiles.open(fn,"w",encoding="utf-8") as f:
+            for it in items: await f.write(json.dumps(it,ensure_ascii=False)+"\n")
     except Exception as e: logging.error(f"Ошибка при сохранении диалога: {e}")
 
 async def load_prompts():
@@ -381,7 +380,7 @@ async def pbot_kind(name: str, question: str | None = None) -> str:
 
 async def generate_text_response_step_1(prompt: str, target_id: int) -> str:
     mode = get_user_mode(target_id)
-    payload = {"model": "openai", "messages": [{"role": "system", "content": get_prompt_by_mode(mode)}, {"role": "user", "content": prompt}], "seed": random.randint(1, 1000000)}
+    payload = {"model": "mistral", "messages": [{"role": "system", "content": get_prompt_by_mode(mode)}, {"role": "user", "content": prompt}], "seed": random.randint(1, 1000000)}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
             async with s.post("https://text.pollinations.ai/openai", headers={"Content-Type": "application/json"}, json=payload) as r:
@@ -1137,6 +1136,7 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
 
 
 
